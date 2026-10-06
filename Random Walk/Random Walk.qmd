@@ -1,0 +1,263 @@
+---
+title: "Random Walk with Momentum"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Simulation function
+
+```{r input-validation}
+check_inputs <- function(n, p) {
+  # Check that n is a positive integer.
+  if (!is.numeric(n) || length(n) != 1L ||
+      !is.finite(n) || n < 1 || n != floor(n)) {
+    stop("n must be a positive integer.")
+  }
+
+  # Check that p is between 0 and 1.
+  if (!is.numeric(p) || length(p) != 1L ||
+      !is.finite(p) || p < 0 || p > 1) {
+    stop("p must be a number between 0 and 1.")
+  }
+}
+```
+
+## Version 1: Using a Loop
+
+```{r loop-function}
+momentum_walk1 <- function(n, p) {
+  check_inputs(n, p)
+
+  directions <- rbind(
+    c( 1,  0),  # right
+    c(-1,  0),  # left
+    c( 0,  1),  # up
+    c( 0, -1)   # down
+  )
+
+  # Choose a random direction for the first step.
+  direction <- sample.int(4, 1)
+  position <- directions[direction, ]
+
+  # Run the remaining steps.
+  if (n > 1) {
+    for (i in 2:n) {
+      # Choose randomly with probability 1 - p.
+      # Otherwise, the direction stays unchanged.
+      if (runif(1) >= p) {
+        direction <- sample.int(4, 1)
+      }
+
+      # Update the position.
+      position <- position + directions[direction, ]
+    }
+  }
+
+  return(position)
+}
+```
+
+## Version 2: Using sapply
+
+```{r apply-function}
+momentum_walk2 <- function(n, p) {
+  check_inputs(n, p)
+
+  directions <- rbind(
+    c( 1,  0),
+    c(-1,  0),
+    c( 0,  1),
+    c( 0, -1)
+  )
+
+  direction <- sample.int(4, 1)
+
+  # Run the function for each step.
+  steps <- sapply(seq_len(n), function(i) {
+    if (i > 1) {
+      if (runif(1) >= p) {
+        # Update the direction in the surrounding function
+        # so the next step remembers it.
+        direction <<- sample.int(4, 1)
+      }
+    }
+
+    # Return this step's movement.
+    directions[direction, ]
+  })
+
+  # Sum each row to get the final position.
+  return(rowSums(steps))
+}
+```
+
+## Implemente the simulation
+
+```{r demonstration}
+# Run both functions for 10 and 1000 steps.
+momentum_walk1(10, 0.6)
+momentum_walk2(10, 0.6)
+
+momentum_walk1(1000, 0.6)
+momentum_walk2(1000, 0.6)
+```
+
+## Reproducibility
+
+### Ten Steps
+
+```{r reproducibility-10}
+set.seed(123)
+result10_a <- momentum_walk1(10, 0.6)
+
+# Set the same seed to reproduce the same random choices.
+set.seed(123)
+result10_b <- momentum_walk1(10, 0.6)
+
+# Display the results and check whether they match exactly.
+rbind(result10_a, result10_b)
+identical(result10_a, result10_b)
+```
+
+### One Thousand Steps
+
+```{r reproducibility-1000}
+set.seed(456)
+result1000_a <- momentum_walk1(1000, 0.6)
+
+set.seed(456)
+result1000_b <- momentum_walk1(1000, 0.6)
+
+rbind(result1000_a, result1000_b)
+identical(result1000_a, result1000_b)
+```
+
+## Does momentum matter?
+
+The distance from the starting point is
+
+$$
+D = \sqrt{x^2 + y^2}.
+$$
+
+```{r momentum-comparison}
+set.seed(789)
+
+# Three momentum probabilities.
+p_values <- c(0, 0.5, 0.9)
+
+positions <- sapply(p_values, function(p) {
+  momentum_walk1(1000, p)
+})
+
+single_results <- data.frame(
+  p = p_values,
+  x = positions[1, ],  # Extract the final x coordinates.
+  y = positions[2, ],  # Extract the final y coordinates.
+
+  # Calculate sqrt(x^2 + y^2) for each final position.
+  distance = sqrt(colSums(positions^2))
+)
+
+print(single_results)
+```
+## Monte Carlo simulation
+
+```{r monte-carlo}
+set.seed(2026)
+
+p_values <- c(0, 0.25, 0.5, 0.75, 0.9) # Momentum probabilities to investigate
+
+mean_distances <- sapply(p_values, function(p) { # Calculate one mean final distance for each probability.
+  # Repeat the simulation 1000 times for this value of p.
+  distances <- replicate(1000, {
+    # Simulate a walk of 1000 steps.
+    position <- momentum_walk1(1000, p)
+
+    sqrt(sum(position^2))  # Calculate the distance from the starting point
+  })
+
+  mean(distances)
+})
+
+# make probabilities and mean distances into a table
+mc_results <- data.frame( 
+  p = p_values,
+  mean_distance = mean_distances
+)
+
+# Print the table without row numbers.
+print(mc_results, row.names = FALSE)
+```
+
+## Computational Performance
+
+```{r load-package}
+
+library(microbenchmark)
+```
+
+### Benchmark with 1,000 Steps
+
+```{r benchmark-1000}
+set.seed(321)
+
+# Display execution times in milliseconds.
+benchmark_1000 <- microbenchmark(
+  loop  = momentum_walk1(1000, 0.6),
+  apply = momentum_walk2(1000, 0.6),
+  times = 50L,
+  unit = "ms"
+)
+
+print(benchmark_1000)
+```
+
+### Benchmark with 100,000 Steps
+
+```{r benchmark-100000}
+# Time each implementation 20 times for longer walks.
+benchmark_100000 <- microbenchmark(
+  loop  = momentum_walk1(100000, 0.6),
+  apply = momentum_walk2(100000, 0.6),
+  times = 20L,
+  unit = "ms"
+)
+
+print(benchmark_100000)
+```
+
+### Performance Summary
+
+```{r performance-summary}
+# Summarize the median execution time for each implementation.
+summarize_benchmark <- function(benchmark, n) {
+  # Group recorded times by implementation and take each median.
+  # Convert nanoseconds to milliseconds by dividing by 10^6.
+  medians <- tapply(
+    benchmark$time,
+    benchmark$expr,
+    median
+  ) / 1e6
+
+  data.frame(
+    n = n,
+    loop_ms = unname(medians["loop"]),
+    apply_ms = unname(medians["apply"]),
+
+    # A ratio above 1 means apply took longer than the loop.
+    apply_over_loop = unname(medians["apply"] / medians["loop"])
+  )
+}
+
+# Combine the summaries for both walk lengths.
+performance <- rbind(
+  summarize_benchmark(benchmark_1000, 1000),
+  summarize_benchmark(benchmark_100000, 100000)
+)
+
+print(performance, row.names = FALSE)
+```

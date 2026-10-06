@@ -1,0 +1,31 @@
+# Monte Carlo Simulation of Campus Bus Arrivals
+
+```{r bus-simulation}
+set.seed(2026)
+
+daily_totals <- replicate(10000, {
+  early_morning <- sum(rpois(3, lambda = 4))
+  morning_peak <- rnorm(1, mean = 45, sd = sqrt(16))
+  midday <- sum(rpois(6, lambda = 15))
+  afternoon_peak <- rnorm(1, mean = 55, sd = sqrt(25))
+  evening <- sum(rpois(6, lambda = 9))
+  # Return the total number of passengers
+  early_morning + morning_peak + midday + afternoon_peak + evening
+})
+
+# Estimate the expectation by averaging across days.
+estimated_mean <- mean(daily_totals)
+theoretical_mean <- 3 * 4 + 45 + 6 * 15 + 55 + 6 * 9
+results <- data.frame(
+  simulated_days = length(daily_totals),
+  estimated_mean = estimated_mean,
+  theoretical_mean = theoretical_mean
+)
+
+print(results, row.names = FALSE)
+```
+
+The simulation estimates an average of
+`r round(estimated_mean, 2)` passengers per day.
+
+The theoretical expectation is 256

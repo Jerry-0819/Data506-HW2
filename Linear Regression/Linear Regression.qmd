@@ -1,0 +1,296 @@
+# Problem 3: Linear Regression
+
+## Data Preparation and De-identification
+
+```{r youtube-data}
+youtube <- read.csv(
+  "https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-03-02/youtube.csv"
+)
+
+# Remove identifiers, descriptive text, and publication information.
+remove_columns <- c(
+  "brand", "superbowl_ads_dot_com_url", "youtube_url",
+  "id", "etag", "published_at", "title",
+  "description", "thumbnail", "channel_title"
+)
+
+youtube_clean <- youtube[
+  , !(names(youtube) %in% remove_columns)
+]
+
+data.frame(
+  rows = nrow(youtube_clean),
+  columns = ncol(youtube_clean)
+)
+```
+
+## Exploring Potential Outcomes
+
+```{r engagement-summary}
+outcomes <- c(
+  "view_count", "like_count", "dislike_count",
+  "favorite_count", "comment_count"
+)
+
+# Summarize each outcome, exclude the missing data
+outcome_summary <- do.call(rbind, lapply(outcomes, function(outcome) {
+  x <- youtube_clean[[outcome]]
+  observed <- x[!is.na(x)]
+
+  data.frame(
+    outcome = outcome,
+    missing = sum(is.na(x)),
+    unique_values = length(unique(observed)),
+    minimum = min(observed),
+    median = median(observed),
+    mean = mean(observed),
+    maximum = max(observed)
+  )
+}))
+
+print(outcome_summary, row.names = FALSE)
+```
+
+```{r engagement-distributions, fig.width=10, fig.height=12}
+# Plot the original and log-transformed distributions side by side.
+old_par <- par(mfrow = c(5, 2), mar = c(4, 4, 3, 1))
+
+invisible(lapply(outcomes, function(outcome) {
+  x <- youtube_clean[[outcome]]
+  x <- x[!is.na(x)]
+
+  hist(
+    x,
+    breaks = 25,
+    main = outcome,
+    xlab = "Original count",
+    col = "lightblue"
+  )
+
+  hist(
+    log1p(x),
+    breaks = 25,
+    main = paste("log(1 +", outcome, ")"),
+    xlab = "Log-transformed count",
+    col = "lightgreen"
+  )
+}))
+
+par(old_par)
+```
+
+View counts: Strong right skew and a few extremely large values. Use log(1 + count) 
+
+Like counts: Strong right skew and a few extremely large values. Use log(1 + count)
+
+Dislike counts: Strong right skew and a few extremely large values. Use log(1 + count)
+
+Favorite counts: All observed values are zero, so there is no variation to explain
+
+Comment counts: Strong right skew and a few extremely large values. Use log(1 + count)
+
+```{r transform-engagement}
+valid_outcomes <- c(
+  "view_count", "like_count", "dislike_count", "comment_count"
+)
+
+# Create a log-transformed column for each retained outcome.
+log_names <- paste0("log_", valid_outcomes)
+
+youtube_clean[log_names] <- lapply(
+  youtube_clean[valid_outcomes],
+  log1p
+)
+```
+
+## Fitting Linear Regression Models
+
+For each outcome and binary characteristic, fit the model
+
+```{r engagement-models}
+characteristics <- c(
+  "funny", "show_product_quickly", "patriotic",
+  "celebrity", "danger", "animals", "use_sex"
+)
+
+# Convert logical values to 0 and 1.
+youtube_clean[characteristics] <- lapply(
+  youtube_clean[characteristics],
+  as.integer
+)
+
+model_grid <- expand.grid(
+  outcome = valid_outcomes,
+  characteristic = characteristics,
+  stringsAsFactors = FALSE
+)
+
+model_results <- do.call(rbind, lapply(
+  seq_len(nrow(model_grid)),
+  function(i) {
+    outcome <- model_grid$outcome[i]
+    characteristic <- model_grid$characteristic[i]
+
+    # Include one characteristic and continuous year.
+    model_formula <- reformulate(
+      c(characteristic, "year"),
+      response = paste0("log_", outcome)
+    )
+
+    # Missing observations are omitted separately for each model.
+    fit <- lm(
+      model_formula,
+      data = youtube_clean,
+      na.action = na.omit
+    )
+
+    coefficient_table <- summary(fit)$coefficients
+
+    data.frame(
+      outcome = outcome,
+      characteristic = characteristic,
+      estimate = coefficient_table[characteristic, "Estimate"],
+      p_value = coefficient_table[characteristic, "Pr(>|t|)"],
+      n = nobs(fit)
+    )
+  }
+))
+
+# Identify significant associations at the 0.05 level.
+alpha <- 0.05
+
+model_results$significant <- model_results$p_value < alpha
+model_results$direction <- ifelse(
+  model_results$estimate > 0,
+  "positive",
+  "negative"
+)
+
+# Display all coefficient estimates and p-values.
+knitr::kable(model_results, digits = 4)
+```
+
+```{r significant-associations}
+# Report significant characteristics separately for each outcome.
+significance_summary <- do.call(rbind, lapply(
+  valid_outcomes,
+  function(outcome) {
+    selected <- subset(
+      model_results,
+      model_results$outcome == outcome & significant
+    )
+
+    associations <- if (nrow(selected) == 0) {
+      "None"
+    } else {
+      paste(
+        paste0(
+          selected$characteristic,
+          " (", selected$direction, ")"
+        ),
+        collapse = ", "
+      )
+    }
+
+    data.frame(
+      outcome = outcome,
+      significant_associations = associations
+    )
+  }
+))
+
+knitr::kable(significance_summary)
+```
+
+```{r largest-view-association}
+# Extract models for the transformed view count outcome
+view_results <- subset(
+  model_results,
+  outcome == "view_count"
+)
+
+# Find the largest positive estimated coefficient
+positive_view_results <- subset(view_results, estimate > 0)
+
+largest_positive <- positive_view_results[
+  which.max(positive_view_results$estimate),
+  c("characteristic", "estimate", "p_value")
+]
+
+knitr::kable(largest_positive, digits = 4)
+```
+
+None of these characteristics has a statistically significant association with any four of the
+outcomes at the 0.05 level.
+
+Danger has the largest positive estimated association. 
+
+## Estimating Regression Coefficients Using Matrix Algebra
+
+```{r select-view-predictor}
+# Select the characteristic with the smallest view-count p-value.
+best_characteristic <- view_results$characteristic[
+  which.min(view_results$p_value)
+]
+
+print(best_characteristic)
+```
+
+```{r matrix-estimation}
+# Use complete observations for the selected model
+needed_columns <- c(
+  "log_view_count", best_characteristic, "year"
+)
+
+model_data <- youtube_clean[
+  complete.cases(youtube_clean[, needed_columns]),
+  needed_columns
+]
+
+# Construct the design matrix:
+X <- cbind(
+  intercept = 1,
+  characteristic = model_data[[best_characteristic]],
+  year = model_data$year
+)
+
+colnames(X) <- c("(Intercept)", best_characteristic, "year")
+
+# Construct the outcome vector.
+Y <- model_data$log_view_count
+
+# Calculate OLS coefficients
+beta_matrix <- solve(t(X) %*% X) %*% t(X) %*% Y
+
+print(beta_matrix)
+```
+
+```{r compare-matrix-lm}
+# Fit the model
+comparison_formula <- reformulate(
+  c(best_characteristic, "year"),
+  response = "log_view_count"
+)
+
+fit_lm <- lm(
+  comparison_formula,
+  data = model_data
+)
+
+# Compare the two sets of estimates
+comparison <- data.frame(
+  term = colnames(X),
+  matrix_estimate = as.numeric(beta_matrix),
+  lm_estimate = as.numeric(coef(fit_lm)),
+  difference = as.numeric(beta_matrix) - as.numeric(coef(fit_lm))
+)
+
+knitr::kable(comparison, digits = 8)
+
+# Check agreement within numerical tolerance
+all.equal(
+  as.numeric(beta_matrix),
+  as.numeric(coef(fit_lm)),
+  tolerance = 1e-6
+)
+```
